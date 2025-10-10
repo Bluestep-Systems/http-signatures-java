@@ -1,0 +1,106 @@
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+    id 'signing'
+}
+
+group = 'dev.bluestep'
+version = '1.0.0'
+description = 'HTTP Message Signatures library for secure request authentication'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25) // Use Java 25 for latest features and performance
+    }
+    withJavadocJar()
+    withSourcesJar()
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // Minimal dependencies - only what's absolutely necessary
+    api 'com.fasterxml.jackson.core:jackson-core:2.15.3'
+    api 'com.fasterxml.jackson.core:jackson-databind:2.15.3'
+
+    // Optional Spring integration
+    compileOnly 'org.springframework:spring-web:6.0.13'
+    compileOnly 'org.springframework:spring-context:6.0.13'
+
+    // Test dependencies
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.13.4'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testImplementation 'org.springframework:spring-test:6.0.13'
+    testImplementation 'org.springframework:spring-web:6.0.13'
+    testImplementation 'org.mockito:mockito-core:5.6.0'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
+
+// Publishing configuration
+publishing {
+    publications {
+        maven(MavenPublication) {
+            from components.java
+            
+            pom {
+                name = 'HTTP Message Signatures'
+                description = 'A secure, standards-compliant HTTP Message Signatures library for Java'
+                url = 'https://github.com/bluestep-systems/http-signatures-java'
+                
+                licenses {
+                    license {
+                        name = 'MIT License'
+                        url = 'https://opensource.org/licenses/MIT'
+                    }
+                }
+                
+                developers {
+                    developer {
+                        id = 'bluestep'
+                        name = 'Bluestep Systems'
+                        email = 'dev@bluestep.systems'
+                    }
+                }
+                
+                scm {
+                    connection = 'scm:git:git://github.com/bluestep-systems/http-signatures-java.git'
+                    developerConnection = 'scm:git:ssh://github.com:bluestep-systems/http-signatures-java.git'
+                    url = 'https://github.com/bluestep-systems/http-signatures-java'
+                }
+            }
+        }
+    }
+    
+    repositories {
+        maven {
+            name = "GitHubPackages"
+            url = uri("https://maven.pkg.github.com/bluestep-systems/http-signatures-java")
+            credentials {
+                username = project.findProperty("gpr.user") ?: System.getenv("USERNAME")
+                password = project.findProperty("gpr.key") ?: System.getenv("TOKEN")
+            }
+        }
+    }
+}
+
+// Signing (for publishing to Maven Central)
+signing {
+    required { gradle.taskGraph.hasTask("publish") }
+    sign publishing.publications.maven
+}
+
+// Generate proper module info for JPMS
+tasks.withType(Jar) {
+    manifest {
+        attributes(
+            'Implementation-Title': project.name,
+            'Implementation-Version': project.version,
+            'Implementation-Vendor': 'Bluestep Systems'
+        )
+    }
+}
