@@ -48,7 +48,7 @@ public class HttpSignatureService {
      * 
      * @param objectMapper Jackson ObjectMapper for JSON serialization
      */
-    public HttpSignatureService(ObjectMapper objectMapper) {
+    public HttpSignatureService(final ObjectMapper objectMapper) {
         this(objectMapper, "default-key");
     }
 
@@ -58,7 +58,7 @@ public class HttpSignatureService {
      * @param objectMapper Jackson ObjectMapper for JSON serialization
      * @param defaultKeyId Default key identifier for signatures
      */
-    public HttpSignatureService(ObjectMapper objectMapper, String defaultKeyId) {
+    public HttpSignatureService(final ObjectMapper objectMapper, final String defaultKeyId) {
         this.objectMapper = objectMapper;
         this.defaultKeyId = defaultKeyId;
     }
@@ -76,39 +76,39 @@ public class HttpSignatureService {
      * @return HttpSignatureHeaders containing all signature-related headers
      * @throws JsonProcessingException if body serialization fails
      */
-    public HttpSignatureHeaders signRequest(String method, String path, String host, 
-                                          HttpHeaders headers, Object body, 
-                                          String secretKey, String keyId) 
+    public HttpSignatureHeaders signRequest(final String method, final String path, final String host, 
+                                          HttpHeaders headers, final Object body, 
+                                          final String secretKey, final String keyId) 
             throws JsonProcessingException {
         
         if (headers == null) {
             headers = new HttpHeaders();
         }
 
-        String actualKeyId = keyId != null ? keyId : defaultKeyId;
+        final String actualKeyId = keyId != null ? keyId : defaultKeyId;
         
         // Add required headers for HTTP Message Signatures
-        String dateValue = createHttpDateHeader();
+        final String dateValue = createHttpDateHeader();
         headers.set(DATE_HEADER, dateValue);
         headers.set("Host", host);
         
         // Calculate content digest (SHA-256 of body)
         String digest = "";
         if (body != null) {
-            String bodyJson = objectMapper.writeValueAsString(body);
+            final String bodyJson = objectMapper.writeValueAsString(body);
             digest = "SHA-256=" + sha256Base64(bodyJson);
             headers.set(DIGEST_HEADER, digest);
             headers.set("Content-Length", String.valueOf(bodyJson.getBytes(StandardCharsets.UTF_8).length));
         }
 
         // Create canonical string to sign (following HTTP Message Signatures pattern)
-        String signingString = createSigningString(method, path, host, dateValue, digest);
+        final String signingString = createSigningString(method, path, host, dateValue, digest);
         
         // Generate HMAC-SHA256 signature
-        String signatureValue = createHmacSignature(signingString, secretKey);
+        final String signatureValue = createHmacSignature(signingString, secretKey);
         
         // Create signature header in standard format
-        String signatureHeader = String.format(
+        final String signatureHeader = String.format(
             "keyId=\"%s\",algorithm=\"hmac-sha256\",headers=\"(request-target) host date digest\",signature=\"%s\"",
             actualKeyId, signatureValue
         );
@@ -121,8 +121,8 @@ public class HttpSignatureService {
     /**
      * Convenience method for signing with default key ID.
      */
-    public HttpSignatureHeaders signRequest(String method, String path, String host, 
-                                          HttpHeaders headers, Object body, String secretKey) 
+    public HttpSignatureHeaders signRequest(final String method, final String path, final String host, 
+                                          final HttpHeaders headers, final Object body, final String secretKey) 
             throws JsonProcessingException {
         return signRequest(method, path, host, headers, body, secretKey, null);
     }
@@ -137,41 +137,53 @@ public class HttpSignatureService {
      * @param secretKey Shared secret for verification
      * @return true if signature is valid and timestamp is within acceptable range
      */
-    public boolean verifyRequest(String method, String path, HttpHeaders headers, 
-                               String body, String secretKey) {
+    public boolean verifyRequest(final String method, final String path, final HttpHeaders headers, 
+                               final String body, final String secretKey) {
         try {
-            String signatureHeader = headers.getFirst(SIGNATURE_HEADER);
-            if (signatureHeader == null) return false;
+            final String signatureHeader = headers.getFirst(SIGNATURE_HEADER);
+            if (signatureHeader == null) {
+                return false;
+            }
 
-            String dateValue = headers.getFirst(DATE_HEADER);
-            if (dateValue == null) return false;
+            final String dateValue = headers.getFirst(DATE_HEADER);
+            if (dateValue == null) {
+                return false;
+            }
 
-            String host = headers.getFirst("Host");
-            if (host == null) return false;
+            final String host = headers.getFirst("Host");
+            if (host == null) {
+                return false;
+            }
 
             // Check timestamp (5-minute window)
-            if (!isDateValid(dateValue)) return false;
+            if (!isDateValid(dateValue)) {
+                return false;
+            }
 
             // Calculate expected digest
             String expectedDigest = "";
             if (body != null && !body.isEmpty()) {
                 expectedDigest = "SHA-256=" + sha256Base64(body);
-                String receivedDigest = headers.getFirst(DIGEST_HEADER);
-                if (!expectedDigest.equals(receivedDigest)) return false;
+                final String receivedDigest = headers.getFirst(DIGEST_HEADER);
+                if (!expectedDigest.equals(receivedDigest)) {
+                    return false;
+                }
             }
 
             // Recreate signing string
-            String signingString = createSigningString(method, path, host, dateValue, expectedDigest);
+            final String signingString = createSigningString(method, path, host, dateValue, expectedDigest);
 
             // Extract signature from header
-            String signature = extractSignatureFromHeader(signatureHeader);
-            if (signature == null) return false;
+            final String signature = extractSignatureFromHeader(signatureHeader);
+            if (signature == null) {
+                return false;
+            }
 
             // Verify signature
-            String expectedSignature = createHmacSignature(signingString, secretKey);
+            final String expectedSignature = createHmacSignature(signingString, secretKey);
             return signature.equals(expectedSignature);
 
-        } catch (Exception e) {
+        } catch (final Exception e) {
             return false;
         }
     }
@@ -179,8 +191,8 @@ public class HttpSignatureService {
     /**
      * Creates the canonical signing string following HTTP Message Signatures specification.
      */
-    private String createSigningString(String method, String path, String host, String date, String digest) {
-        StringBuilder sb = new StringBuilder();
+    private String createSigningString(final String method, final String path, final String host, final String date, final String digest) {
+        final StringBuilder sb = new StringBuilder();
         
         // (request-target) - HTTP method and path
         sb.append("(request-target): ").append(method.toLowerCase()).append(" ").append(path).append("\n");
@@ -205,13 +217,13 @@ public class HttpSignatureService {
     /**
      * Creates HMAC-SHA256 signature.
      */
-    private String createHmacSignature(String signingString, String secret) {
+    private String createHmacSignature(final String signingString, final String secret) {
         try {
-            Mac mac = Mac.getInstance(SIGNATURE_ALGORITHM);
-            SecretKeySpec keySpec = new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), SIGNATURE_ALGORITHM);
+            final Mac mac = Mac.getInstance(SIGNATURE_ALGORITHM);
+            final SecretKeySpec keySpec = new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), SIGNATURE_ALGORITHM);
             mac.init(keySpec);
             
-            byte[] signatureBytes = mac.doFinal(signingString.getBytes(StandardCharsets.UTF_8));
+            final byte[] signatureBytes = mac.doFinal(signingString.getBytes(StandardCharsets.UTF_8));
             return Base64.getEncoder().encodeToString(signatureBytes);
             
         } catch (NoSuchAlgorithmException | InvalidKeyException e) {
@@ -222,12 +234,12 @@ public class HttpSignatureService {
     /**
      * Creates SHA-256 hash of content for HTTP Digest header.
      */
-    private String sha256Base64(String content) {
+    private String sha256Base64(final String content) {
         try {
-            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
-            byte[] hashBytes = digest.digest(content.getBytes(StandardCharsets.UTF_8));
+            final java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            final byte[] hashBytes = digest.digest(content.getBytes(StandardCharsets.UTF_8));
             return Base64.getEncoder().encodeToString(hashBytes);
-        } catch (NoSuchAlgorithmException e) {
+        } catch (final NoSuchAlgorithmException e) {
             throw new RuntimeException("SHA-256 not available", e);
         }
     }
@@ -244,14 +256,14 @@ public class HttpSignatureService {
     /**
      * Validates if a date string is within acceptable range (5 minutes).
      */
-    private boolean isDateValid(String dateStr) {
+    private boolean isDateValid(final String dateStr) {
         try {
-            Instant headerTime = Instant.from(java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.parse(dateStr));
-            long now = Instant.now().toEpochMilli();
-            long headerTimeMs = headerTime.toEpochMilli();
-            long fiveMinutes = 5 * 60 * 1000;
+            final Instant headerTime = Instant.from(java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.parse(dateStr));
+            final long now = Instant.now().toEpochMilli();
+            final long headerTimeMs = headerTime.toEpochMilli();
+            final long fiveMinutes = 5 * 60 * 1000;
             return Math.abs(now - headerTimeMs) <= fiveMinutes;
-        } catch (Exception e) {
+        } catch (final Exception e) {
             return false;
         }
     }
@@ -259,10 +271,10 @@ public class HttpSignatureService {
     /**
      * Extracts signature value from Signature header.
      */
-    private String extractSignatureFromHeader(String signatureHeader) {
+    private String extractSignatureFromHeader(final String signatureHeader) {
         // Parse: keyId="...",algorithm="...",headers="...",signature="..."
-        String[] parts = signatureHeader.split(",");
-        for (String part : parts) {
+        final String[] parts = signatureHeader.split(",");
+        for (final String part : parts) {
             if (part.trim().startsWith("signature=")) {
                 return part.substring(part.indexOf("\"") + 1, part.lastIndexOf("\""));
             }

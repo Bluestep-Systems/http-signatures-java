@@ -8,7 +8,7 @@ public class HttpSignatureHeaders {
     
     private final HttpHeaders headers;
     
-    public HttpSignatureHeaders(HttpHeaders headers) {
+    public HttpSignatureHeaders(final HttpHeaders headers) {
         this.headers = headers;
     }
     
@@ -51,10 +51,9 @@ public class HttpSignatureHeaders {
      * Adds these signature headers to an existing Spring HttpHeaders object.
      * This method is only available when Spring is on the classpath.
      */
-    @SuppressWarnings("unchecked")
-    public void addToSpringHeaders(Object springHeaders) {
+    public void addToSpringHeaders(final Object springHeaders) {
         if (springHeaders instanceof org.springframework.http.HttpHeaders) {
-            org.springframework.http.HttpHeaders springHttpHeaders = (org.springframework.http.HttpHeaders) springHeaders;
+            final org.springframework.http.HttpHeaders springHttpHeaders = (org.springframework.http.HttpHeaders) springHeaders;
             headers.toMap().forEach(springHttpHeaders::set);
         }
     }
