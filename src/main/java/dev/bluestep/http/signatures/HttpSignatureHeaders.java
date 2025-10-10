@@ -69,8 +69,7 @@ public class HttpSignatureHeaders {
      * @param springHeaders a Spring Framework HttpHeaders object to add headers to
      */
     public void addToSpringHeaders(final Object springHeaders) {
-        if (springHeaders instanceof org.springframework.http.HttpHeaders) {
-            final org.springframework.http.HttpHeaders springHttpHeaders = (org.springframework.http.HttpHeaders) springHeaders;
+        if (springHeaders instanceof final org.springframework.http.HttpHeaders springHttpHeaders) {
             headers.toMap().forEach(springHttpHeaders::set);
         }
     }
