@@ -120,9 +120,18 @@ public class HttpSignatureService {
 
     /**
      * Convenience method for signing with default key ID.
+     *
+     * @param method HTTP method (e.g., "POST", "GET")
+     * @param path Request path (e.g., "/api/endpoint")
+     * @param host Target host (e.g., "api.example.com")
+     * @param headers Existing request headers (will be modified)
+     * @param body Request body object (null for no body)
+     * @param secretKey Shared secret for HMAC signing
+     * @return HttpSignatureHeaders containing all signature-related headers
+     * @throws JsonProcessingException if body serialization fails
      */
-    public HttpSignatureHeaders signRequest(final String method, final String path, final String host, 
-                                          final HttpHeaders headers, final Object body, final String secretKey) 
+    public HttpSignatureHeaders signRequest(final String method, final String path, final String host,
+                                          final HttpHeaders headers, final Object body, final String secretKey)
             throws JsonProcessingException {
         return signRequest(method, path, host, headers, body, secretKey, null);
     }

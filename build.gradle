@@ -90,7 +90,7 @@ publishing {
 
 // Signing (for publishing to Maven Central)
 signing {
-    required { gradle.taskGraph.hasTask("publish") }
+    required = gradle.taskGraph.hasTask("publish")
     sign publishing.publications.maven
 }
 
