@@ -5,7 +5,7 @@ plugins {
 }
 
 group = 'dev.bluestep'
-version = '1.0.0'
+version = '1.0.1'
 description = 'HTTP Message Signatures library for secure request authentication'
 
 java {
