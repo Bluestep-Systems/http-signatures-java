@@ -514,4 +514,269 @@ class HttpSignatureServiceTest {
             .withZone(ZoneId.of("GMT"))
             .format(Instant.now());
     }
+
+    // ========== Query Parameter Signature Tests ==========
+
+    @Test
+    @DisplayName("Should sign query parameters successfully")
+    void testSignQueryParameters_Success() {
+        Map<String, String> params = Map.of(
+            "host", "example.bluestep.net",
+            "destUrl", "/callback",
+            "userToken", "abc123"
+        );
+
+        QueryParameterSignature result = service.signQueryParameters(params, TEST_SECRET);
+
+        assertNotNull(result, "Should return signature result");
+        assertEquals(params, result.getParameters(), "Should preserve original parameters");
+        assertTrue(result.getTimestamp() > 0, "Should have valid timestamp");
+        assertNotNull(result.getSignature(), "Should have signature");
+        assertFalse(result.getSignature().isEmpty(), "Signature should not be empty");
+    }
+
+    @Test
+    @DisplayName("Should include all parameters in getAllParameters")
+    void testSignQueryParameters_AllParameters() {
+        Map<String, String> params = Map.of("key", "value");
+
+        QueryParameterSignature result = service.signQueryParameters(params, TEST_SECRET);
+        Map<String, String> allParams = result.getAllParameters();
+
+        assertTrue(allParams.containsKey("key"), "Should contain original param");
+        assertTrue(allParams.containsKey(QueryParameterSignature.TIMESTAMP_PARAM), "Should contain timestamp");
+        assertTrue(allParams.containsKey(QueryParameterSignature.SIGNATURE_PARAM), "Should contain signature");
+    }
+
+    @Test
+    @DisplayName("Should generate valid query string")
+    void testSignQueryParameters_QueryString() {
+        Map<String, String> params = Map.of("host", "example.com");
+
+        QueryParameterSignature result = service.signQueryParameters(params, TEST_SECRET);
+        String queryString = result.toQueryString();
+
+        assertTrue(queryString.contains("host=example.com"), "Should contain original param");
+        assertTrue(queryString.contains("_sig_ts="), "Should contain timestamp param");
+        assertTrue(queryString.contains("_sig="), "Should contain signature param");
+    }
+
+    @Test
+    @DisplayName("Should generate valid URL")
+    void testSignQueryParameters_ToUrl() {
+        Map<String, String> params = Map.of("host", "example.com");
+
+        QueryParameterSignature result = service.signQueryParameters(params, TEST_SECRET);
+        String url = result.toUrl("https://oauth.example.com/initiate");
+
+        assertTrue(url.startsWith("https://oauth.example.com/initiate?"), "Should append query string");
+        assertTrue(url.contains("host=example.com"), "Should contain parameters");
+    }
+
+    @Test
+    @DisplayName("Should append to URL with existing query params")
+    void testSignQueryParameters_ToUrlWithExistingParams() {
+        Map<String, String> params = Map.of("host", "example.com");
+
+        QueryParameterSignature result = service.signQueryParameters(params, TEST_SECRET);
+        String url = result.toUrl("https://oauth.example.com/initiate?existing=param");
+
+        assertTrue(url.contains("existing=param"), "Should preserve existing params");
+        assertTrue(url.contains("&host="), "Should append with &");
+    }
+
+    @Test
+    @DisplayName("Should verify valid query parameter signature")
+    void testVerifyQueryParameters_Valid() {
+        Map<String, String> params = Map.of(
+            "host", "example.bluestep.net",
+            "destUrl", "/callback",
+            "userToken", "abc123"
+        );
+
+        // Sign
+        QueryParameterSignature signed = service.signQueryParameters(params, TEST_SECRET);
+
+        // Verify
+        var result = service.verifyQueryParameters(signed.getAllParameters(), TEST_SECRET);
+
+        assertTrue(result.valid(), "Should verify successfully");
+        assertNull(result.errorMessage(), "Should have no error message");
+        assertEquals(params, result.parameters(), "Should return original parameters");
+    }
+
+    @Test
+    @DisplayName("Should reject missing timestamp")
+    void testVerifyQueryParameters_MissingTimestamp() {
+        Map<String, String> params = Map.of(
+            "host", "example.com",
+            QueryParameterSignature.SIGNATURE_PARAM, "somesig"
+        );
+
+        var result = service.verifyQueryParameters(params, TEST_SECRET);
+
+        assertFalse(result.valid(), "Should reject");
+        assertEquals("Missing timestamp parameter", result.errorMessage());
+    }
+
+    @Test
+    @DisplayName("Should reject missing signature")
+    void testVerifyQueryParameters_MissingSignature() {
+        Map<String, String> params = Map.of(
+            "host", "example.com",
+            QueryParameterSignature.TIMESTAMP_PARAM, String.valueOf(Instant.now().toEpochMilli())
+        );
+
+        var result = service.verifyQueryParameters(params, TEST_SECRET);
+
+        assertFalse(result.valid(), "Should reject");
+        assertEquals("Missing signature parameter", result.errorMessage());
+    }
+
+    @Test
+    @DisplayName("Should reject invalid timestamp format")
+    void testVerifyQueryParameters_InvalidTimestamp() {
+        Map<String, String> params = Map.of(
+            "host", "example.com",
+            QueryParameterSignature.TIMESTAMP_PARAM, "not-a-number",
+            QueryParameterSignature.SIGNATURE_PARAM, "somesig"
+        );
+
+        var result = service.verifyQueryParameters(params, TEST_SECRET);
+
+        assertFalse(result.valid(), "Should reject");
+        assertEquals("Invalid timestamp format", result.errorMessage());
+    }
+
+    @Test
+    @DisplayName("Should reject expired signature")
+    void testVerifyQueryParameters_Expired() {
+        Map<String, String> params = Map.of("host", "example.com");
+
+        // Sign
+        QueryParameterSignature signed = service.signQueryParameters(params, TEST_SECRET);
+
+        // Create params with old timestamp
+        Map<String, String> expiredParams = new HashMap<>(signed.getAllParameters());
+        long tenMinutesAgo = Instant.now().minusSeconds(10 * 60).toEpochMilli();
+        expiredParams.put(QueryParameterSignature.TIMESTAMP_PARAM, String.valueOf(tenMinutesAgo));
+
+        var result = service.verifyQueryParameters(expiredParams, TEST_SECRET);
+
+        assertFalse(result.valid(), "Should reject expired signature");
+        assertEquals("Signature has expired", result.errorMessage());
+    }
+
+    @Test
+    @DisplayName("Should reject future timestamp beyond clock skew")
+    void testVerifyQueryParameters_FutureTimestamp() {
+        Map<String, String> params = Map.of("host", "example.com");
+
+        // Sign
+        QueryParameterSignature signed = service.signQueryParameters(params, TEST_SECRET);
+
+        // Create params with future timestamp
+        Map<String, String> futureParams = new HashMap<>(signed.getAllParameters());
+        long tenMinutesLater = Instant.now().plusSeconds(10 * 60).toEpochMilli();
+        futureParams.put(QueryParameterSignature.TIMESTAMP_PARAM, String.valueOf(tenMinutesLater));
+
+        var result = service.verifyQueryParameters(futureParams, TEST_SECRET);
+
+        assertFalse(result.valid(), "Should reject future timestamp");
+        assertEquals("Timestamp is in the future", result.errorMessage());
+    }
+
+    @Test
+    @DisplayName("Should reject tampered parameters")
+    void testVerifyQueryParameters_Tampered() {
+        Map<String, String> params = Map.of(
+            "host", "example.bluestep.net",
+            "destUrl", "/callback"
+        );
+
+        // Sign
+        QueryParameterSignature signed = service.signQueryParameters(params, TEST_SECRET);
+
+        // Tamper with host
+        Map<String, String> tamperedParams = new HashMap<>(signed.getAllParameters());
+        tamperedParams.put("host", "attacker.com");
+
+        var result = service.verifyQueryParameters(tamperedParams, TEST_SECRET);
+
+        assertFalse(result.valid(), "Should reject tampered parameters");
+        assertEquals("Invalid signature", result.errorMessage());
+    }
+
+    @Test
+    @DisplayName("Should reject wrong secret")
+    void testVerifyQueryParameters_WrongSecret() {
+        Map<String, String> params = Map.of("host", "example.com");
+
+        // Sign with one secret
+        QueryParameterSignature signed = service.signQueryParameters(params, TEST_SECRET);
+
+        // Verify with different secret
+        var result = service.verifyQueryParameters(signed.getAllParameters(), "wrong-secret");
+
+        assertFalse(result.valid(), "Should reject wrong secret");
+        assertEquals("Invalid signature", result.errorMessage());
+    }
+
+    @Test
+    @DisplayName("Should handle URL-encoded special characters")
+    void testSignQueryParameters_SpecialCharacters() {
+        Map<String, String> params = Map.of(
+            "destUrl", "/path?foo=bar&baz=qux",
+            "userToken", "token+with/special=chars"
+        );
+
+        // Sign
+        QueryParameterSignature signed = service.signQueryParameters(params, TEST_SECRET);
+
+        // Verify
+        var result = service.verifyQueryParameters(signed.getAllParameters(), TEST_SECRET);
+
+        assertTrue(result.valid(), "Should handle special characters");
+        assertEquals(params, result.parameters(), "Should preserve original values");
+    }
+
+    @Test
+    @DisplayName("Should produce consistent signatures for same input")
+    void testSignQueryParameters_Deterministic() {
+        Map<String, String> params = Map.of(
+            "b", "2",
+            "a", "1",
+            "c", "3"
+        );
+
+        // The signing string should sort parameters alphabetically
+        // so different ordering of the same params should produce same signature
+        // (when timestamp is the same)
+
+        QueryParameterSignature signed1 = service.signQueryParameters(params, TEST_SECRET);
+
+        // Verify with same params in different order
+        Map<String, String> reorderedParams = new HashMap<>();
+        reorderedParams.put("c", "3");
+        reorderedParams.put("a", "1");
+        reorderedParams.put("b", "2");
+        reorderedParams.put(QueryParameterSignature.TIMESTAMP_PARAM, String.valueOf(signed1.getTimestamp()));
+        reorderedParams.put(QueryParameterSignature.SIGNATURE_PARAM, signed1.getSignature());
+
+        var result = service.verifyQueryParameters(reorderedParams, TEST_SECRET);
+
+        assertTrue(result.valid(), "Should verify regardless of parameter order");
+    }
+
+    @Test
+    @DisplayName("Should handle empty parameters map")
+    void testSignQueryParameters_EmptyParams() {
+        Map<String, String> params = Map.of();
+
+        QueryParameterSignature signed = service.signQueryParameters(params, TEST_SECRET);
+        var result = service.verifyQueryParameters(signed.getAllParameters(), TEST_SECRET);
+
+        assertTrue(result.valid(), "Should handle empty parameters");
+        assertTrue(result.parameters().isEmpty(), "Should return empty parameters");
+    }
 }

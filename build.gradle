@@ -5,7 +5,7 @@ plugins {
 }
 
 group = 'dev.bluestep'
-version = '1.0.2'
+version = '1.1.0'
 description = 'HTTP Message Signatures library for secure request authentication'
 
 java {
@@ -77,6 +77,8 @@ publishing {
     }
     
     repositories {
+        mavenLocal()
+
         maven {
             name = "GitHubPackages"
             url = uri("https://maven.pkg.github.com/bluestep-systems/http-signatures-java")
