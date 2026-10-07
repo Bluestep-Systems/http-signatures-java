@@ -260,6 +260,37 @@ class HttpSignatureHeadersTest {
         assertEquals(longSignature, signatureHeaders.getSignature());
     }
 
+    // ========== Spring Integration Tests ==========
+
+    @Test
+    @DisplayName("addToSpringHeaders copies every signed header onto Spring HttpHeaders")
+    void testAddToSpringHeaders_CopiesAllHeaders() {
+        HttpSignatureService service = new HttpSignatureService(new tools.jackson.databind.ObjectMapper());
+        HttpSignatureHeaders signed = service.signRequest(
+            "POST", "/api/test", "api.example.com", new HttpHeaders(), "{\"k\":\"v\"}", "secret"
+        );
+        org.springframework.http.HttpHeaders springHeaders = new org.springframework.http.HttpHeaders();
+        springHeaders.set("X-Existing", "kept");
+
+        signed.addToSpringHeaders(springHeaders);
+
+        assertEquals(signed.getSignature(), springHeaders.getFirst("Signature"));
+        assertEquals(signed.getDate(), springHeaders.getFirst("Date"));
+        assertEquals(signed.getHost(), springHeaders.getFirst("Host"));
+        assertEquals(signed.getDigest(), springHeaders.getFirst("Digest"));
+        assertEquals(signed.getAllHeaders().getFirst("Content-Length"), springHeaders.getFirst("Content-Length"));
+        assertEquals("kept", springHeaders.getFirst("X-Existing"), "Existing Spring headers should be kept");
+    }
+
+    @Test
+    @DisplayName("addToSpringHeaders ignores an object that is not Spring HttpHeaders")
+    void testAddToSpringHeaders_IgnoresNonSpringObject() {
+        baseHeaders.set("Signature", "sig-value");
+
+        assertDoesNotThrow(() -> signatureHeaders.addToSpringHeaders(new java.util.HashMap<String, String>()));
+        assertDoesNotThrow(() -> signatureHeaders.addToSpringHeaders(null));
+    }
+
     // ========== Integration Tests ==========
 
     @Test

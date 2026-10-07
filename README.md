@@ -10,7 +10,7 @@ A secure, standards-compliant HTTP Message Signatures library implementing RFC-l
 - ✅ **Body integrity** - SHA-256 content digest verification
 - ✅ **Cross-host protection** - Host header signing
 - ✅ **Spring Boot integration** - Easy @Service integration
-- ✅ **Lightweight** - No external dependencies beyond Jackson
+- ✅ **Lightweight** - No external dependencies beyond Jackson 3 (Spring integration optional)
 
 ## Security Improvements over Custom Implementations
 
@@ -27,17 +27,19 @@ A secure, standards-compliant HTTP Message Signatures library implementing RFC-l
 <dependency>
     <groupId>dev.bluestep</groupId>
     <artifactId>http-signatures</artifactId>
-    <version>1.0.0</version>
+    <version>2.0.0</version>
 </dependency>
 ```
 
 ### Gradle
 ```gradle
-implementation 'dev.bluestep:http-signatures:1.0.0'
+implementation 'dev.bluestep:http-signatures:2.0.0'
 ```
 
 ### Spring Boot Configuration
 ```java
+import tools.jackson.databind.ObjectMapper; // Jackson 3
+
 @Configuration
 public class HttpSignatureConfiguration {
     
@@ -49,30 +51,43 @@ public class HttpSignatureConfiguration {
 ```
 
 ### Signing Requests (Client Side)
+
+The `Digest` header covers the exact UTF-8 bytes of the body, and the verifier digests the raw
+body it receives. Serialize the body **once**, sign that string, and send that same string:
+
 ```java
 @Service
 public class ApiClient {
     
     private final HttpSignatureService signatureService;
+    private final ObjectMapper objectMapper;
     private final RestTemplate restTemplate;
     
     @Value("${api.agent.token}")
     private String agentToken;
     
     public ResponseEntity<String> makeSecureRequest(RequestData data, String host, String path) {
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        HttpEntity<RequestData> requestEntity = new HttpEntity<>(data, headers);
-        
-        // Sign the request
-        HttpEntity<RequestData> signedRequest = signatureService.signRequest(
-            requestEntity, agentToken, "POST", path, host
+        final String json = objectMapper.writeValueAsString(data);
+
+        // Sign exactly the string that will be sent
+        final HttpSignatureHeaders signed = signatureService.signRequest(
+            "POST", path, host, new dev.bluestep.http.signatures.HttpHeaders(), json, agentToken
         );
-        
-        return restTemplate.postForEntity("https://" + host + path, signedRequest, String.class);
+
+        final HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        signed.addToSpringHeaders(headers);
+
+        // A String body is written verbatim by StringHttpMessageConverter; do not hand the
+        // original object to RestTemplate, whose own mapper may serialize it differently.
+        return restTemplate.postForEntity("https://" + host + path, new HttpEntity<>(json, headers), String.class);
     }
 }
 ```
+
+The `Object`-body `signRequest` overloads are a convenience: they serialize with the service's
+`ObjectMapper` and delegate to the `String` overload, so they are only correct if you then send
+`objectMapper.writeValueAsString(body)` yourself.
 
 ### Verifying Requests (Server Side)
 ```java
@@ -117,6 +132,31 @@ public class SecureController {
     }
 }
 ```
+
+## Migrating from 1.x to 2.0.0
+
+2.0.0 drops Jackson 2 for Jackson 3 and adds a first-class way to sign a pre-serialized body.
+
+- **Jackson 3.** The constructors take `tools.jackson.databind.ObjectMapper` instead of
+  `com.fasterxml.jackson.databind.ObjectMapper`, and the library depends on
+  `tools.jackson.core:jackson-databind` 3.x instead of Jackson 2. Change the import where you build
+  the service; a Spring Boot 4 application can inject its auto-configured mapper.
+- **No checked exception.** The `signRequest` overloads no longer declare
+  `throws JsonProcessingException`. Jackson 3's `JacksonException` is unchecked, so remove
+  `try`/`catch (JsonProcessingException)` blocks and `throws` clauses that existed only for it.
+- **New `String`-body overloads.** `signRequest(method, path, host, headers, String serializedBody,
+  secretKey[, keyId])` digests exactly the UTF-8 bytes of the string you pass; you must send that
+  string unchanged. Prefer it whenever an HTTP client would otherwise serialize the body itself
+  (Spring Boot 4's `RestTemplate`/`RestClient` write with Jackson 3, whose default property order
+  differs from Jackson 2's). Workarounds such as passing `new RawValue(json)` as the body can be
+  replaced with the plain `json` string.
+- **A `String` argument now binds to the new overload.** In 1.x a `String`-typed body was
+  JSON-encoded (signed as `"\"...\""`); in 2.0.0 it is signed verbatim. A `null` or empty
+  `String` body is signed as a request without a body: any `Digest`/`Content-Length` already
+  on the passed headers is removed.
+- **Spring.** The optional Spring integration (`HttpSignatureHeaders.addToSpringHeaders`) is built
+  and tested against Spring Framework 7.
+- `verifyRequest` is unchanged: it digests the raw body string it is given.
 
 ## Generated Headers
 

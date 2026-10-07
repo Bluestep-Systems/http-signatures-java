@@ -53,6 +53,16 @@ public class HttpHeaders {
     }
 
     /**
+     * Removes a header if present; a no-op otherwise.
+     * Header name lookup is case-insensitive.
+     *
+     * @param name the header name to remove (case-insensitive)
+     */
+    public void remove(final String name) {
+        headers.remove(name.toLowerCase());
+    }
+
+    /**
      * Sets multiple headers from a map.
      * All header names will be normalized to lowercase.
      *
