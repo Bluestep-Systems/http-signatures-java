@@ -1,11 +1,10 @@
 plugins {
     id 'java-library'
     id 'maven-publish'
-    id 'signing'
 }
 
 group = 'dev.bluestep'
-version = '1.1.0'
+version = '2.0.0'
 description = 'HTTP Message Signatures library for secure request authentication'
 
 java {
@@ -21,20 +20,23 @@ repositories {
 }
 
 dependencies {
-    // Minimal dependencies - only what's absolutely necessary
-    api 'com.fasterxml.jackson.core:jackson-core:2.15.3'
-    api 'com.fasterxml.jackson.core:jackson-databind:2.15.3'
+    // Jackson 3 is an `api` dependency because it appears in the public API: the
+    // HttpSignatureService constructors take a tools.jackson.databind.ObjectMapper, which the
+    // Object-body signRequest overloads serialize with. Callers that sign a pre-serialized
+    // String body never touch it. Jackson 3's exceptions are unchecked, so no Jackson type
+    // appears in a throws clause.
+    api 'tools.jackson.core:jackson-databind:3.1.6'
 
-    // Optional Spring integration
-    compileOnly 'org.springframework:spring-web:6.0.13'
-    compileOnly 'org.springframework:spring-context:6.0.13'
+    // Optional Spring integration (HttpSignatureHeaders.addToSpringHeaders); the library must
+    // keep working with Spring absent from the classpath.
+    compileOnly 'org.springframework:spring-web:7.0.9'
+    compileOnly 'org.springframework:spring-context:7.0.9'
 
     // Test dependencies
     testImplementation 'org.junit.jupiter:junit-jupiter:5.13.4'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
-    testImplementation 'org.springframework:spring-test:6.0.13'
-    testImplementation 'org.springframework:spring-web:6.0.13'
-    testImplementation 'org.mockito:mockito-core:5.6.0'
+    testImplementation 'org.springframework:spring-test:7.0.9'
+    testImplementation 'org.springframework:spring-web:7.0.9'
 }
 
 tasks.named('test') {
@@ -88,12 +90,6 @@ publishing {
             }
         }
     }
-}
-
-// Signing (for publishing to Maven Central)
-signing {
-    required = gradle.taskGraph.hasTask("publish")
-    sign publishing.publications.maven
 }
 
 // Generate proper module info for JPMS

@@ -11,6 +11,10 @@ outbound and inbound HTTP requests. Two independent signing modes:
   `HttpSignatureService`. The canonical signing string is built from exactly
   four components: `(request-target)`, `host`, `date`, `digest`. Changing that
   set or its order breaks compatibility with every deployed verifier.
+  The `String`-body `signRequest` overloads are the primitive: they digest exactly
+  the UTF-8 bytes given (the caller must send that string). The `Object`-body
+  overloads serialize with the injected Jackson 3 `ObjectMapper` and delegate;
+  `verifyRequest` digests the raw received string, never re-serializing.
 - **Query-parameter signatures** — `signQueryParameters()` /
   `verifyQueryParameters()`, for signing a URL rather than a request. The
   signature and timestamp ride in the `_sig` and `_sig_ts` parameters, which are
@@ -25,12 +29,13 @@ outbound and inbound HTTP requests. Two independent signing modes:
 
 ## Non-obvious behavior
 
-- **Replay windows differ between the two modes.** Header verification allows a
-  5-minute age but only **1 minute of clock skew into the future**
-  (`HttpSignatureService:392`) — a verifier whose clock runs fast will reject
-  otherwise valid requests. Query-parameter verification uses
-  `DEFAULT_MAX_SIGNATURE_AGE` of 5 minutes, overridable per call via the
-  3-argument `verifyQueryParameters(..., Duration maxAge)`.
+- **Replay windows differ between the two modes.** Header verification
+  (`isDateValid`) accepts a `Date` up to 5 minutes away **in either direction**
+  (symmetric skew). Query-parameter verification allows only **1 minute of
+  clock skew into the future** and a `DEFAULT_MAX_SIGNATURE_AGE` of 5 minutes,
+  overridable per call via the 3-argument
+  `verifyQueryParameters(..., Duration maxAge)` — a verifier whose clock runs
+  fast will reject otherwise valid signed URLs.
 - **Verification is fail-safe by design**: any exception or failed check returns
   false (headers) or a `QuerySignatureVerificationResult.failure(...)` (query
   params) rather than propagating. Do not "fix" a swallowed exception here into
@@ -45,8 +50,8 @@ outbound and inbound HTTP requests. Two independent signing modes:
 
 ## Testing
 
-`./gradlew test`. Four test classes, 128 tests total: `HttpSignatureServiceTest`
-(44), `QueryParameterSignatureTest` (34), `HttpSignatureHeadersTest` (26),
+`./gradlew test`. Four test classes, 135 tests total: `HttpSignatureServiceTest`
+(49), `QueryParameterSignatureTest` (34), `HttpSignatureHeadersTest` (28),
 `HttpHeadersTest` (24). Coverage includes tamper detection (modified body, path,
 method, host), replay prevention, cross-host attacks, and malformed input.
 

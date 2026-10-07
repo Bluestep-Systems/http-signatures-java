@@ -1,14 +1,18 @@
 package dev.bluestep.http.signatures;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.DisplayName;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.time.ZoneId;
+import java.util.Base64;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -505,6 +509,107 @@ class HttpSignatureServiceTest {
         );
 
         assertTrue(valid, "Should handle special characters in body");
+    }
+
+    // ========== Pre-serialized (String) Body Tests ==========
+
+    @Test
+    @DisplayName("String overload digests and counts exactly the UTF-8 bytes of the given body")
+    void testSignSerializedBody_DigestIsSha256OfExactUtf8Bytes() throws Exception {
+        String serializedBody = "{\"name\":\"Zoë — 日本語 🚀\"}";
+        byte[] bodyBytes = serializedBody.getBytes(StandardCharsets.UTF_8);
+        String expectedDigest = "SHA-256=" + Base64.getEncoder().encodeToString(
+            MessageDigest.getInstance("SHA-256").digest(bodyBytes));
+        HttpHeaders headers = new HttpHeaders();
+
+        HttpSignatureHeaders result = service.signRequest(
+            TEST_METHOD, TEST_PATH, TEST_HOST, headers, serializedBody, TEST_SECRET
+        );
+
+        assertEquals(expectedDigest, result.getDigest(), "Digest should cover the exact UTF-8 bytes");
+        assertNotEquals(serializedBody.length(), bodyBytes.length, "Fixture must contain multi-byte characters");
+        assertEquals(String.valueOf(bodyBytes.length), headers.getFirst("Content-Length"),
+            "Content-Length should be the UTF-8 byte count, not the char count");
+    }
+
+    @Test
+    @DisplayName("Request signed via the String overload verifies against the same string")
+    void testSignSerializedBody_VerifiesWithVerifyRequest() {
+        String serializedBody = "{\"b\":2,\"a\":\"über\"}";
+
+        HttpSignatureHeaders signedHeaders = service.signRequest(
+            TEST_METHOD, TEST_PATH, TEST_HOST, new HttpHeaders(), serializedBody, TEST_SECRET, "agent-key"
+        );
+
+        assertTrue(signedHeaders.getSignature().contains("keyId=\"agent-key\""), "Should use the given key ID");
+        assertTrue(service.verifyRequest(
+            TEST_METHOD, TEST_PATH, signedHeaders.getAllHeaders(), serializedBody, TEST_SECRET
+        ), "A request whose body is exactly the signed string should verify");
+    }
+
+    @Test
+    @DisplayName("Object overload equals the String overload over mapper.writeValueAsString(body)")
+    void testObjectOverload_MatchesStringOverloadOverMapperOutput() {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("zeta", "last");
+        body.put("alpha", 1);
+        body.put("text", "café");
+        String mapperJson = objectMapper.writeValueAsString(body);
+
+        // Date has one-second resolution; retry until both signatures share a Date so the
+        // signatures themselves are comparable.
+        HttpHeaders objectHeaders = null;
+        HttpHeaders stringHeaders = null;
+        for (int attempt = 0; attempt < 5; attempt++) {
+            objectHeaders = service.signRequest(
+                TEST_METHOD, TEST_PATH, TEST_HOST, new HttpHeaders(), (Object) body, TEST_SECRET, "k1"
+            ).getAllHeaders();
+            stringHeaders = service.signRequest(
+                TEST_METHOD, TEST_PATH, TEST_HOST, new HttpHeaders(), mapperJson, TEST_SECRET, "k1"
+            ).getAllHeaders();
+            if (objectHeaders.getFirst("Date").equals(stringHeaders.getFirst("Date"))) {
+                break;
+            }
+        }
+
+        assertEquals(stringHeaders.getFirst("Date"), objectHeaders.getFirst("Date"));
+        assertEquals(stringHeaders.toMap(), objectHeaders.toMap(),
+            "Object overload should produce exactly the String overload's headers over the mapper's JSON");
+        assertTrue(service.verifyRequest(TEST_METHOD, TEST_PATH, objectHeaders, mapperJson, TEST_SECRET),
+            "Object-signed request should verify against the mapper's JSON");
+    }
+
+    @Test
+    @DisplayName("Body sent with different bytes than were signed fails verification")
+    void testSignSerializedBody_DifferentBytesThanSignedFailsVerification() {
+        String signedBody = "{\"a\":1,\"b\":2}";
+
+        HttpSignatureHeaders signedHeaders = service.signRequest(
+            TEST_METHOD, TEST_PATH, TEST_HOST, new HttpHeaders(), signedBody, TEST_SECRET
+        );
+
+        // Same JSON value, different bytes: re-ordered properties and added whitespace.
+        assertFalse(service.verifyRequest(
+            TEST_METHOD, TEST_PATH, signedHeaders.getAllHeaders(), "{\"b\":2,\"a\":1}", TEST_SECRET
+        ), "Re-ordered properties should fail verification");
+        assertFalse(service.verifyRequest(
+            TEST_METHOD, TEST_PATH, signedHeaders.getAllHeaders(), "{\"a\": 1, \"b\": 2}", TEST_SECRET
+        ), "Re-formatted body should fail verification");
+    }
+
+    @Test
+    @DisplayName("Empty String body is signed as no body and verifies with an empty or null body")
+    void testSignSerializedBody_EmptyIsNoBody() {
+        HttpHeaders headers = new HttpHeaders();
+
+        HttpSignatureHeaders signedHeaders = service.signRequest(
+            TEST_METHOD, TEST_PATH, TEST_HOST, headers, "", TEST_SECRET
+        );
+
+        assertNull(signedHeaders.getDigest(), "Empty body should not produce a Digest");
+        assertNull(headers.getFirst("Content-Length"), "Empty body should not set Content-Length");
+        assertTrue(service.verifyRequest(TEST_METHOD, TEST_PATH, headers, "", TEST_SECRET));
+        assertTrue(service.verifyRequest(TEST_METHOD, TEST_PATH, headers, null, TEST_SECRET));
     }
 
     // ========== Helper Methods ==========

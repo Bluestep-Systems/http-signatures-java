@@ -14,8 +14,7 @@ import java.util.TreeMap;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * Service for creating secure HTTP request signatures using HTTP Message Signatures patterns.
@@ -34,9 +33,16 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  * - Includes comprehensive request metadata in signature
  * - Provides both signing and verification capabilities
  * - Easy to debug with standard headers
+ * <p>
+ * <strong>Sign the bytes you send.</strong> The {@code Digest} header is a SHA-256 over the body's
+ * UTF-8 bytes, and the verifier digests the raw body it received. Prefer the {@code String}-body
+ * {@code signRequest} overloads, which digest exactly the string the caller then sends. The
+ * {@code Object}-body overloads serialize with this service's Jackson 3 {@link ObjectMapper}; they
+ * are only correct when the caller sends that same serialization (not one produced again by an
+ * HTTP client's own message converter, whose mapper may order properties differently).
  * 
  * @author Bluestep Systems
- * @version 1.0.0
+ * @version 2.0.0
  */
 public class HttpSignatureService {
 
@@ -51,7 +57,8 @@ public class HttpSignatureService {
     /**
      * Creates a new HttpSignatureService with default configuration.
      * 
-     * @param objectMapper Jackson ObjectMapper for JSON serialization
+     * @param objectMapper Jackson 3 ObjectMapper used by the {@code Object}-body {@code signRequest}
+     *                     overloads to serialize the body
      */
     public HttpSignatureService(final ObjectMapper objectMapper) {
         this(objectMapper, "default-key");
@@ -60,7 +67,8 @@ public class HttpSignatureService {
     /**
      * Creates a new HttpSignatureService with custom key ID.
      * 
-     * @param objectMapper Jackson ObjectMapper for JSON serialization
+     * @param objectMapper Jackson 3 ObjectMapper used by the {@code Object}-body {@code signRequest}
+     *                     overloads to serialize the body
      * @param defaultKeyId Default key identifier for signatures
      */
     public HttpSignatureService(final ObjectMapper objectMapper, final String defaultKeyId) {
@@ -69,23 +77,33 @@ public class HttpSignatureService {
     }
 
     /**
-     * Signs HTTP request data and returns signature headers.
-     * 
+     * Signs an HTTP request whose body is already serialized, and returns the signature headers.
+     * <p>
+     * The {@code Digest} header is the SHA-256 of exactly the UTF-8 bytes of {@code serializedBody},
+     * and {@code Content-Length} is that byte count. No serializer is involved: <strong>the caller
+     * MUST send exactly this string, encoded as UTF-8, as the request body</strong>. Any other bytes
+     * (a re-serialization, a different charset, added whitespace) fail verification.
+     * <p>
+     * A {@code null} or empty body is signed as a request without a body: no {@code Digest} or
+     * {@code Content-Length} header is set and the signing string omits the digest line, which is
+     * how {@link #verifyRequest} treats a {@code null} or empty received body.
+     * <p>
+     * An argument whose static type is {@code String} binds to this overload, so it is signed
+     * verbatim rather than serialized as a JSON string value.
+     *
      * @param method HTTP method (e.g., "POST", "GET")
      * @param path Request path (e.g., "/api/endpoint")
      * @param host Target host (e.g., "api.example.com")
-     * @param headers Existing request headers (will be modified)
-     * @param body Request body object (null for no body)
+     * @param headers Existing request headers (will be modified; null to start empty)
+     * @param serializedBody The exact request body that will be sent (null or empty for no body)
      * @param secretKey Shared secret for HMAC signing
      * @param keyId Key identifier (null to use default)
      * @return HttpSignatureHeaders containing all signature-related headers
-     * @throws JsonProcessingException if body serialization fails
      */
-    public HttpSignatureHeaders signRequest(final String method, final String path, final String host, 
-                                          HttpHeaders headers, final Object body, 
-                                          final String secretKey, final String keyId) 
-            throws JsonProcessingException {
-        
+    public HttpSignatureHeaders signRequest(final String method, final String path, final String host,
+                                          HttpHeaders headers, final String serializedBody,
+                                          final String secretKey, final String keyId) {
+
         if (headers == null) {
             headers = new HttpHeaders();
         }
@@ -97,13 +115,13 @@ public class HttpSignatureService {
         headers.set(DATE_HEADER, dateValue);
         headers.set("Host", host);
         
-        // Calculate content digest (SHA-256 of body)
+        // Calculate content digest (SHA-256 of the exact body bytes)
         String digest = "";
-        if (body != null) {
-            final String bodyJson = objectMapper.writeValueAsString(body);
-            digest = "SHA-256=" + sha256Base64(bodyJson);
+        if (serializedBody != null && !serializedBody.isEmpty()) {
+            final byte[] bodyBytes = serializedBody.getBytes(StandardCharsets.UTF_8);
+            digest = "SHA-256=" + sha256Base64(bodyBytes);
             headers.set(DIGEST_HEADER, digest);
-            headers.set("Content-Length", String.valueOf(bodyJson.getBytes(StandardCharsets.UTF_8).length));
+            headers.set("Content-Length", String.valueOf(bodyBytes.length));
         }
 
         // Create canonical string to sign (following HTTP Message Signatures pattern)
@@ -124,30 +142,80 @@ public class HttpSignatureService {
     }
 
     /**
-     * Convenience method for signing with default key ID.
+     * Signs an already-serialized request body with the default key ID.
+     * <p>
+     * See {@link #signRequest(String, String, String, HttpHeaders, String, String, String)}:
+     * <strong>the caller MUST send exactly {@code serializedBody}</strong>, UTF-8 encoded.
      *
      * @param method HTTP method (e.g., "POST", "GET")
      * @param path Request path (e.g., "/api/endpoint")
      * @param host Target host (e.g., "api.example.com")
-     * @param headers Existing request headers (will be modified)
+     * @param headers Existing request headers (will be modified; null to start empty)
+     * @param serializedBody The exact request body that will be sent (null or empty for no body)
+     * @param secretKey Shared secret for HMAC signing
+     * @return HttpSignatureHeaders containing all signature-related headers
+     */
+    public HttpSignatureHeaders signRequest(final String method, final String path, final String host,
+                                          final HttpHeaders headers, final String serializedBody,
+                                          final String secretKey) {
+        return signRequest(method, path, host, headers, serializedBody, secretKey, null);
+    }
+
+    /**
+     * Convenience: serializes {@code body} with this service's {@link ObjectMapper} and signs the
+     * result via {@link #signRequest(String, String, String, HttpHeaders, String, String, String)}.
+     * <p>
+     * The digest covers {@code objectMapper.writeValueAsString(body)}, so the caller must send that
+     * same JSON. If an HTTP client will serialize {@code body} itself, serialize it once instead and
+     * use the {@code String} overload, sending the string it signed.
+     *
+     * @param method HTTP method (e.g., "POST", "GET")
+     * @param path Request path (e.g., "/api/endpoint")
+     * @param host Target host (e.g., "api.example.com")
+     * @param headers Existing request headers (will be modified; null to start empty)
+     * @param body Request body object (null for no body)
+     * @param secretKey Shared secret for HMAC signing
+     * @param keyId Key identifier (null to use default)
+     * @return HttpSignatureHeaders containing all signature-related headers
+     * @throws tools.jackson.core.JacksonException (unchecked) if body serialization fails
+     */
+    public HttpSignatureHeaders signRequest(final String method, final String path, final String host,
+                                          final HttpHeaders headers, final Object body,
+                                          final String secretKey, final String keyId) {
+        final String serializedBody = body != null ? objectMapper.writeValueAsString(body) : null;
+        return signRequest(method, path, host, headers, serializedBody, secretKey, keyId);
+    }
+
+    /**
+     * Convenience: serializes {@code body} with this service's {@link ObjectMapper} and signs the
+     * result with the default key ID. The caller must send that same JSON; see
+     * {@link #signRequest(String, String, String, HttpHeaders, Object, String, String)}.
+     *
+     * @param method HTTP method (e.g., "POST", "GET")
+     * @param path Request path (e.g., "/api/endpoint")
+     * @param host Target host (e.g., "api.example.com")
+     * @param headers Existing request headers (will be modified; null to start empty)
      * @param body Request body object (null for no body)
      * @param secretKey Shared secret for HMAC signing
      * @return HttpSignatureHeaders containing all signature-related headers
-     * @throws JsonProcessingException if body serialization fails
+     * @throws tools.jackson.core.JacksonException (unchecked) if body serialization fails
      */
     public HttpSignatureHeaders signRequest(final String method, final String path, final String host,
-                                          final HttpHeaders headers, final Object body, final String secretKey)
-            throws JsonProcessingException {
+                                          final HttpHeaders headers, final Object body, final String secretKey) {
         return signRequest(method, path, host, headers, body, secretKey, null);
     }
 
     /**
      * Verifies an HTTP request signature.
+     * <p>
+     * The digest is computed over the UTF-8 bytes of {@code body} exactly as given; nothing is
+     * re-serialized, so pass the raw body as received. Fail-safe: any failed check or exception
+     * yields {@code false}. Signature and digest comparisons are constant-time.
      * 
      * @param method HTTP method from the request
      * @param path Request path
      * @param headers Request headers containing signature
-     * @param body Request body as string (null for no body)
+     * @param body Raw request body as received (null or empty for no body)
      * @param secretKey Shared secret for verification
      * @return true if signature is valid and timestamp is within acceptable range
      */
@@ -174,12 +242,12 @@ public class HttpSignatureService {
                 return false;
             }
 
-            // Calculate expected digest
+            // Calculate expected digest over the raw received bytes
             String expectedDigest = "";
             if (body != null && !body.isEmpty()) {
-                expectedDigest = "SHA-256=" + sha256Base64(body);
+                expectedDigest = "SHA-256=" + sha256Base64(body.getBytes(StandardCharsets.UTF_8));
                 final String receivedDigest = headers.getFirst(DIGEST_HEADER);
-                if (!expectedDigest.equals(receivedDigest)) {
+                if (receivedDigest == null || !constantTimeEquals(expectedDigest, receivedDigest)) {
                     return false;
                 }
             }
@@ -195,11 +263,20 @@ public class HttpSignatureService {
 
             // Verify signature
             final String expectedSignature = createHmacSignature(signingString, secretKey);
-            return signature.equals(expectedSignature);
+            return constantTimeEquals(expectedSignature, signature);
 
         } catch (final Exception e) {
             return false;
         }
+    }
+
+    /**
+     * Compares two strings in constant time (over their UTF-8 bytes) to prevent timing attacks.
+     */
+    private static boolean constantTimeEquals(final String expected, final String actual) {
+        return MessageDigest.isEqual(
+            expected.getBytes(StandardCharsets.UTF_8),
+            actual.getBytes(StandardCharsets.UTF_8));
     }
 
     /**
@@ -246,12 +323,12 @@ public class HttpSignatureService {
     }
 
     /**
-     * Creates SHA-256 hash of content for HTTP Digest header.
+     * Creates the Base64 SHA-256 hash of the exact body bytes for the HTTP Digest header.
      */
-    private String sha256Base64(final String content) {
+    private String sha256Base64(final byte[] content) {
         try {
-            final java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
-            final byte[] hashBytes = digest.digest(content.getBytes(StandardCharsets.UTF_8));
+            final MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            final byte[] hashBytes = digest.digest(content);
             return Base64.getEncoder().encodeToString(hashBytes);
         } catch (final NoSuchAlgorithmException e) {
             throw new RuntimeException("SHA-256 not available", e);
@@ -463,6 +540,10 @@ public class HttpSignatureService {
 
     /**
      * Result of query parameter signature verification.
+     *
+     * @param valid        whether the signature verified
+     * @param errorMessage why verification failed, or null on success
+     * @param parameters   the verified original parameters (without signature metadata), or null on failure
      */
     public record QuerySignatureVerificationResult(boolean valid, String errorMessage, Map<String, String> parameters) {
 
