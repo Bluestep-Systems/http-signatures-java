@@ -156,6 +156,27 @@ class HttpSignatureServiceTest {
         assertTrue(Integer.parseInt(headers.getFirst("Content-Length")) > 0);
     }
 
+    @Test
+    @DisplayName("Should remove Digest and Content-Length left by an earlier signing when the body is empty")
+    void testSignRequest_EmptyBodyClearsStaleBodyHeaders() {
+        HttpHeaders headers = new HttpHeaders();
+
+        service.signRequest(TEST_METHOD, TEST_PATH, TEST_HOST, headers, "{\"a\":1}", TEST_SECRET);
+        assertNotNull(headers.getFirst("Digest"), "Precondition: bodied sign sets Digest");
+        assertNotNull(headers.getFirst("Content-Length"), "Precondition: bodied sign sets Content-Length");
+
+        HttpSignatureHeaders result = service.signRequest(
+            "GET", TEST_PATH, TEST_HOST, headers, "", TEST_SECRET
+        );
+
+        assertFalse(headers.containsKey("Digest"), "Stale Digest must not survive an empty-body sign");
+        assertFalse(headers.containsKey("Content-Length"),
+            "Stale Content-Length must not survive an empty-body sign");
+        assertNull(result.getDigest(), "Returned headers must not carry a Digest");
+        assertTrue(service.verifyRequest("GET", TEST_PATH, result.getAllHeaders(), "", TEST_SECRET),
+            "Empty-body signature should verify against an empty body");
+    }
+
     // ========== Verification Tests ==========
 
     @Test

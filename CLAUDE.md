@@ -50,9 +50,9 @@ outbound and inbound HTTP requests. Two independent signing modes:
 
 ## Testing
 
-`./gradlew test`. Four test classes, 135 tests total: `HttpSignatureServiceTest`
-(49), `QueryParameterSignatureTest` (34), `HttpSignatureHeadersTest` (28),
-`HttpHeadersTest` (24). Coverage includes tamper detection (modified body, path,
+`./gradlew test`. Four test classes, 137 tests total: `HttpSignatureServiceTest`
+(50), `QueryParameterSignatureTest` (34), `HttpSignatureHeadersTest` (28),
+`HttpHeadersTest` (25). Coverage includes tamper detection (modified body, path,
 method, host), replay prevention, cross-host attacks, and malformed input.
 
 If you add or remove tests, either update these counts or delete them — a stale

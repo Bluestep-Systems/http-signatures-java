@@ -50,6 +50,7 @@ public class HttpSignatureService {
     private static final String SIGNATURE_HEADER = "Signature";
     private static final String DIGEST_HEADER = "Digest";
     private static final String DATE_HEADER = "Date";
+    private static final String CONTENT_LENGTH_HEADER = "Content-Length";
     
     private final ObjectMapper objectMapper;
     private final String defaultKeyId;
@@ -84,9 +85,10 @@ public class HttpSignatureService {
      * MUST send exactly this string, encoded as UTF-8, as the request body</strong>. Any other bytes
      * (a re-serialization, a different charset, added whitespace) fail verification.
      * <p>
-     * A {@code null} or empty body is signed as a request without a body: no {@code Digest} or
-     * {@code Content-Length} header is set and the signing string omits the digest line, which is
-     * how {@link #verifyRequest} treats a {@code null} or empty received body.
+     * A {@code null} or empty body is signed as a request without a body: any {@code Digest} or
+     * {@code Content-Length} header already on {@code headers} (say, from an earlier signing that
+     * reused them) is removed, and the signing string omits the digest line, which is how
+     * {@link #verifyRequest} treats a {@code null} or empty received body.
      * <p>
      * An argument whose static type is {@code String} binds to this overload, so it is signed
      * verbatim rather than serialized as a JSON string value.
@@ -121,7 +123,10 @@ public class HttpSignatureService {
             final byte[] bodyBytes = serializedBody.getBytes(StandardCharsets.UTF_8);
             digest = "SHA-256=" + sha256Base64(bodyBytes);
             headers.set(DIGEST_HEADER, digest);
-            headers.set("Content-Length", String.valueOf(bodyBytes.length));
+            headers.set(CONTENT_LENGTH_HEADER, String.valueOf(bodyBytes.length));
+        } else {
+            headers.remove(DIGEST_HEADER);
+            headers.remove(CONTENT_LENGTH_HEADER);
         }
 
         // Create canonical string to sign (following HTTP Message Signatures pattern)

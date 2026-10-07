@@ -152,7 +152,8 @@ public class SecureController {
   replaced with the plain `json` string.
 - **A `String` argument now binds to the new overload.** In 1.x a `String`-typed body was
   JSON-encoded (signed as `"\"...\""`); in 2.0.0 it is signed verbatim. A `null` or empty
-  `String` body is signed as a request without a body (no `Digest`/`Content-Length`).
+  `String` body is signed as a request without a body: any `Digest`/`Content-Length` already
+  on the passed headers is removed.
 - **Spring.** The optional Spring integration (`HttpSignatureHeaders.addToSpringHeaders`) is built
   and tested against Spring Framework 7.
 - `verifyRequest` is unchanged: it digests the raw body string it is given.

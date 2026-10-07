@@ -223,6 +223,19 @@ class HttpHeadersTest {
     // ========== Edge Cases ==========
 
     @Test
+    @DisplayName("Should remove a header case-insensitively, and ignore an absent one")
+    void testRemoveCaseInsensitive() {
+        headers.set("Content-Length", "7");
+        headers.set("Digest", "SHA-256=abc");
+
+        headers.remove("CONTENT-LENGTH");
+        headers.remove("Not-Present");
+
+        assertFalse(headers.containsKey("Content-Length"));
+        assertEquals("SHA-256=abc", headers.getFirst("Digest"), "Other headers must be untouched");
+    }
+
+    @Test
     @DisplayName("Should handle null value in set")
     void testSetNullValue() {
         assertDoesNotThrow(() -> headers.set("Content-Type", null));
