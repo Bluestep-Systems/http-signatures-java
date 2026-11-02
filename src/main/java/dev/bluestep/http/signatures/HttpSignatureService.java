@@ -1,5 +1,6 @@
 package dev.bluestep.http.signatures;
 
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.security.InvalidKeyException;
 import java.security.MessageDigest;
@@ -409,9 +410,14 @@ public class HttpSignatureService {
      * @return QueryParameterSignature containing original params plus signature metadata
      */
     public QueryParameterSignature signQueryParameters(final Map<String, String> parameters, final String secretKey) {
+        for (final String key : parameters.keySet()) {
+            if (isSignatureMetadata(key)) {
+                throw new IllegalArgumentException("Parameter name is reserved for signature metadata: " + key);
+            }
+        }
         final long timestamp = Instant.now().toEpochMilli();
-        final String signingString = createQuerySigningString(parameters, timestamp);
-        final String signature = createHmacSignatureUrlSafe(signingString, secretKey);
+        final String signingString = createQuerySigningString(parameters, timestamp, QueryParameterSignature.CURRENT_VERSION);
+        final String signature = createQuerySignature(signingString, secretKey, QueryParameterSignature.CURRENT_VERSION);
         return new QueryParameterSignature(parameters, timestamp, signature);
     }
 
@@ -478,19 +484,23 @@ public class HttpSignatureService {
             return QuerySignatureVerificationResult.failure("Signature has expired");
         }
 
+        // Absent is version 1, from a signer built before versioning; anything else must be a version we know.
+        final String version = parameters.getOrDefault(QueryParameterSignature.VERSION_PARAM, LEGACY_VERSION);
+        if (!LEGACY_VERSION.equals(version) && !QueryParameterSignature.CURRENT_VERSION.equals(version)) {
+            return QuerySignatureVerificationResult.failure("Unsupported signature version");
+        }
+
         // Extract original parameters (without signature metadata)
         final Map<String, String> originalParams = new LinkedHashMap<>();
         for (final var entry : parameters.entrySet()) {
-            final String key = entry.getKey();
-            if (!QueryParameterSignature.TIMESTAMP_PARAM.equals(key)
-                    && !QueryParameterSignature.SIGNATURE_PARAM.equals(key)) {
-                originalParams.put(key, entry.getValue());
+            if (!isSignatureMetadata(entry.getKey())) {
+                originalParams.put(entry.getKey(), entry.getValue());
             }
         }
 
         // Compute expected signature
-        final String signingString = createQuerySigningString(originalParams, timestamp);
-        final String expectedSignature = createHmacSignatureUrlSafe(signingString, secretKey);
+        final String signingString = createQuerySigningString(originalParams, timestamp, version);
+        final String expectedSignature = createQuerySignature(signingString, secretKey, version);
 
         // Constant-time comparison to prevent timing attacks
         if (!MessageDigest.isEqual(
@@ -502,15 +512,31 @@ public class HttpSignatureService {
         return QuerySignatureVerificationResult.success(originalParams);
     }
 
+    /** The signing-format version a link without {@link QueryParameterSignature#VERSION_PARAM} was signed under. */
+    private static final String LEGACY_VERSION = "1";
+
+    /** Whether {@code key} is one of the signature-metadata parameters, which are never part of the signed payload. */
+    private static boolean isSignatureMetadata(final String key) {
+        return QueryParameterSignature.TIMESTAMP_PARAM.equals(key)
+                || QueryParameterSignature.SIGNATURE_PARAM.equals(key)
+                || QueryParameterSignature.VERSION_PARAM.equals(key);
+    }
+
     /**
      * Creates the canonical signing string for query parameters.
      * <p>
      * Parameters are sorted alphabetically by key, then concatenated as
      * {@code key=value} pairs joined by {@code &}. The timestamp is appended last.
      * <p>
-     * This ensures consistent ordering regardless of how parameters were provided.
+     * In version 2 every key and value is percent-encoded first, so a {@code &} or {@code =} inside a value
+     * can never read as a parameter boundary. (What keeps a version 2 signature from verifying as version 1 is
+     * the key it is made with, not this string: see {@link #createQuerySignature}.) Version 1 joins raw values, so
+     * {@code a=x&b=y} and {@code a=x%26b%3Dy} (one parameter) sign alike; it is verified only for links from
+     * signers built before version 2.
      */
-    private String createQuerySigningString(final Map<String, String> parameters, final long timestamp) {
+    private String createQuerySigningString(final Map<String, String> parameters, final long timestamp,
+            final String version) {
+        final boolean encoded = QueryParameterSignature.CURRENT_VERSION.equals(version);
         // Sort parameters alphabetically for consistent signing
         final TreeMap<String, String> sorted = new TreeMap<>(parameters);
 
@@ -519,25 +545,49 @@ public class HttpSignatureService {
             if (sb.length() > 0) {
                 sb.append("&");
             }
-            sb.append(entry.getKey()).append("=").append(entry.getValue());
+            if (encoded) {
+                sb.append(urlEncode(entry.getKey())).append("=").append(urlEncode(entry.getValue()));
+            } else {
+                sb.append(entry.getKey()).append("=").append(entry.getValue());
+            }
         }
         sb.append("&").append(QueryParameterSignature.TIMESTAMP_PARAM).append("=").append(timestamp);
 
         return sb.toString();
     }
 
+    /** Percent-encodes {@code value} as UTF-8, the escaping version 2 signs under. */
+    private static String urlEncode(final String value) {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8);
+    }
+
+    /** The label the version 2 query-signing key is derived under; changing it invalidates every v2 link. */
+    private static final byte[] QUERY_V2_KEY_LABEL =
+            "http-signatures query-parameter signing v2".getBytes(StandardCharsets.UTF_8);
+
     /**
-     * Creates HMAC-SHA256 signature with URL-safe Base64 encoding (no padding).
+     * Signs a query signing string under {@code version}, as URL-safe Base64 without padding.
+     * <p>
+     * Version 1 is HMAC-SHA256 keyed with the shared secret itself. Version 2 is keyed with
+     * HMAC-SHA256(secret, {@link #QUERY_V2_KEY_LABEL}) instead, so the two versions sign under different keys:
+     * no version 1 signing string, whatever parameter names an attacker chooses, can reproduce a version 2
+     * signature, and dropping {@link QueryParameterSignature#VERSION_PARAM} from a version 2 link never verifies.
      */
-    private String createHmacSignatureUrlSafe(final String signingString, final String secret) {
+    private static String createQuerySignature(final String signingString, final String secret, final String version) {
+        final byte[] secretBytes = secret.getBytes(StandardCharsets.UTF_8);
+        final byte[] key = QueryParameterSignature.CURRENT_VERSION.equals(version)
+                ? hmacSha256(secretBytes, QUERY_V2_KEY_LABEL)
+                : secretBytes;
+        return Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(hmacSha256(key, signingString.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    /** HMAC-SHA256 of {@code data} under {@code key}. */
+    private static byte[] hmacSha256(final byte[] key, final byte[] data) {
         try {
             final Mac mac = Mac.getInstance(SIGNATURE_ALGORITHM);
-            final SecretKeySpec keySpec = new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), SIGNATURE_ALGORITHM);
-            mac.init(keySpec);
-
-            final byte[] signatureBytes = mac.doFinal(signingString.getBytes(StandardCharsets.UTF_8));
-            return Base64.getUrlEncoder().withoutPadding().encodeToString(signatureBytes);
-
+            mac.init(new SecretKeySpec(key, SIGNATURE_ALGORITHM));
+            return mac.doFinal(data);
         } catch (NoSuchAlgorithmException | InvalidKeyException e) {
             throw new RuntimeException("Failed to create HMAC signature", e);
         }

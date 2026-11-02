@@ -17,8 +17,13 @@ outbound and inbound HTTP requests. Two independent signing modes:
   `verifyRequest` digests the raw received string, never re-serializing.
 - **Query-parameter signatures** — `signQueryParameters()` /
   `verifyQueryParameters()`, for signing a URL rather than a request. The
-  signature and timestamp ride in the `_sig` and `_sig_ts` parameters, which are
-  excluded from the signed payload and from `getParameters()`.
+  signature, timestamp and signing-format version ride in the `_sig`, `_sig_ts` and
+  `_sig_v` parameters, which are excluded from the signed payload and from
+  `getParameters()`. Version 2 (`_sig_v=2`, what `signQueryParameters` emits)
+  percent-encodes keys and values and signs under a key derived from the secret,
+  so a v2 signature never verifies as v1; an absent `_sig_v` is
+  version 1 (raw values, ambiguous at `&`/`=`), still verified for older signers.
+  A verifier that rebuilds the parameter map by hand must pass `_sig_v` through.
 
 ## Build & Publish
 
@@ -50,8 +55,8 @@ outbound and inbound HTTP requests. Two independent signing modes:
 
 ## Testing
 
-`./gradlew test`. Four test classes, 137 tests total: `HttpSignatureServiceTest`
-(50), `QueryParameterSignatureTest` (34), `HttpSignatureHeadersTest` (28),
+`./gradlew test`. Four test classes, 145 tests total: `HttpSignatureServiceTest`
+(58), `QueryParameterSignatureTest` (34), `HttpSignatureHeadersTest` (28),
 `HttpHeadersTest` (25). Coverage includes tamper detection (modified body, path,
 method, host), replay prevention, cross-host attacks, and malformed input.
 

@@ -14,6 +14,10 @@ import java.util.Base64;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.TreeMap;
+
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -888,6 +892,7 @@ class HttpSignatureServiceTest {
         reorderedParams.put("b", "2");
         reorderedParams.put(QueryParameterSignature.TIMESTAMP_PARAM, String.valueOf(signed1.getTimestamp()));
         reorderedParams.put(QueryParameterSignature.SIGNATURE_PARAM, signed1.getSignature());
+        reorderedParams.put(QueryParameterSignature.VERSION_PARAM, QueryParameterSignature.CURRENT_VERSION);
 
         var result = service.verifyQueryParameters(reorderedParams, TEST_SECRET);
 
@@ -904,5 +909,125 @@ class HttpSignatureServiceTest {
 
         assertTrue(result.valid(), "Should handle empty parameters");
         assertTrue(result.parameters().isEmpty(), "Should return empty parameters");
+    }
+
+    // ========== Signing-format version 2 ==========
+
+    /** Signs {@code parameters} under the version 1 format, as a signer built before version 2 does. */
+    private static Map<String, String> signedV1(final Map<String, String> parameters, final long timestamp) throws Exception {
+        final StringBuilder sb = new StringBuilder();
+        for (final var entry : new TreeMap<>(parameters).entrySet()) {
+            if (sb.length() > 0) {
+                sb.append("&");
+            }
+            sb.append(entry.getKey()).append("=").append(entry.getValue());
+        }
+        sb.append("&").append(QueryParameterSignature.TIMESTAMP_PARAM).append("=").append(timestamp);
+        final Mac mac = Mac.getInstance("HmacSHA256");
+        mac.init(new SecretKeySpec(TEST_SECRET.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+        final Map<String, String> signed = new HashMap<>(parameters);
+        signed.put(QueryParameterSignature.TIMESTAMP_PARAM, String.valueOf(timestamp));
+        signed.put(QueryParameterSignature.SIGNATURE_PARAM, Base64.getUrlEncoder().withoutPadding()
+            .encodeToString(mac.doFinal(sb.toString().getBytes(StandardCharsets.UTF_8))));
+        return signed;
+    }
+
+    @Test
+    @DisplayName("A signed link carries _sig_v=2 and verifies with it")
+    void testV2SignedLinkVerifies() {
+        final QueryParameterSignature signed = service.signQueryParameters(
+            Map.of("destUrl", "/portal?done=1", "environment", "sandbox"), TEST_SECRET);
+
+        final Map<String, String> all = signed.getAllParameters();
+        assertEquals(QueryParameterSignature.CURRENT_VERSION, all.get(QueryParameterSignature.VERSION_PARAM));
+        final var result = service.verifyQueryParameters(all, TEST_SECRET);
+        assertTrue(result.valid(), result.errorMessage());
+        assertEquals(Map.of("destUrl", "/portal?done=1", "environment", "sandbox"), result.parameters(),
+            "the version is metadata, not a signed parameter");
+    }
+
+    /**
+     * The boundary-folding forgery: version 1 joins raw values, so moving a signed parameter into the value
+     * before it kept the signing string, and the signature, unchanged. Version 2 escapes the folded {@code &}.
+     */
+    @Test
+    @DisplayName("A parameter folded into the value before it no longer verifies")
+    void testV2RefusesFoldedParameter() {
+        final Map<String, String> all = service.signQueryParameters(
+            Map.of("destUrl", "/portal?done=1", "environment", "sandbox"), TEST_SECRET).getAllParameters();
+
+        final Map<String, String> folded = new HashMap<>(all);
+        folded.remove("environment");
+        folded.put("destUrl", "/portal?done=1&environment=sandbox");
+
+        assertFalse(service.verifyQueryParameters(folded, TEST_SECRET).valid());
+    }
+
+    @Test
+    @DisplayName("A version 2 signature stripped of _sig_v does not verify as version 1")
+    void testV2StrippedOfVersionRefused() {
+        final Map<String, String> all = new HashMap<>(service.signQueryParameters(
+            Map.of("destUrl", "portal", "host", "example.com"), TEST_SECRET).getAllParameters());
+        all.remove(QueryParameterSignature.VERSION_PARAM);
+
+        assertFalse(service.verifyQueryParameters(all, TEST_SECRET).valid());
+    }
+
+    @Test
+    @DisplayName("A link from a version 1 signer, with no _sig_v, still verifies")
+    void testV1LinkStillVerifies() throws Exception {
+        final Map<String, String> v1 = signedV1(Map.of("host", "example.com", "destUrl", "/a b?c=d"),
+            Instant.now().toEpochMilli());
+
+        final var result = service.verifyQueryParameters(v1, TEST_SECRET);
+        assertTrue(result.valid(), result.errorMessage());
+        assertEquals(Map.of("host", "example.com", "destUrl", "/a b?c=d"), result.parameters());
+    }
+
+    @Test
+    @DisplayName("A version 1 signature relabelled _sig_v=2 does not verify")
+    void testV1RelabelledAsV2Refused() throws Exception {
+        final Map<String, String> v1 = signedV1(Map.of("host", "example.com"), Instant.now().toEpochMilli());
+        v1.put(QueryParameterSignature.VERSION_PARAM, QueryParameterSignature.CURRENT_VERSION);
+
+        assertFalse(service.verifyQueryParameters(v1, TEST_SECRET).valid());
+    }
+
+    @Test
+    @DisplayName("An unknown _sig_v is refused")
+    void testUnknownVersionRefused() {
+        final Map<String, String> all = new HashMap<>(
+            service.signQueryParameters(Map.of("host", "example.com"), TEST_SECRET).getAllParameters());
+        all.put(QueryParameterSignature.VERSION_PARAM, "3");
+
+        final var result = service.verifyQueryParameters(all, TEST_SECRET);
+        assertFalse(result.valid());
+        assertEquals("Unsupported signature version", result.errorMessage());
+    }
+
+    @Test
+    @DisplayName("Signing refuses a parameter named like signature metadata")
+    void testSignRefusesReservedNames() {
+        for (final String reserved : new String[] {QueryParameterSignature.TIMESTAMP_PARAM,
+                QueryParameterSignature.SIGNATURE_PARAM, QueryParameterSignature.VERSION_PARAM}) {
+            assertThrows(IllegalArgumentException.class,
+                () -> service.signQueryParameters(Map.of(reserved, "x"), TEST_SECRET), reserved);
+        }
+    }
+
+    /**
+     * The downgrade a textual version marker would allow: a parameter renamed to start with that marker
+     * reproduces it in the version 1 string. Version 2 signs under a derived key, so no version 1 string matches.
+     */
+    @Test
+    @DisplayName("A version 2 signature does not verify as version 1 under any choice of parameter names")
+    void testV2NotReplayableAsV1ByRenamingParameters() {
+        final Map<String, String> all = new HashMap<>(
+            service.signQueryParameters(Map.of("a", "x"), TEST_SECRET).getAllParameters());
+        all.remove(QueryParameterSignature.VERSION_PARAM);
+        all.remove("a");
+        all.put("v2\na", "x");
+
+        assertFalse(service.verifyQueryParameters(all, TEST_SECRET).valid());
     }
 }

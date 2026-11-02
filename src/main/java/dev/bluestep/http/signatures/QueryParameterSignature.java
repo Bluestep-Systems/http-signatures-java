@@ -23,6 +23,17 @@ public class QueryParameterSignature {
     /** Query parameter name for the HMAC signature. */
     public static final String SIGNATURE_PARAM = "_sig";
 
+    /**
+     * Query parameter name for the signing-format version. Absent means version 1, whose signing string
+     * joins raw values and so cannot tell a literal {@code &} or {@code =} inside a value from a parameter
+     * boundary; version 2 percent-encodes every key and value. Excluded from the signed payload and from
+     * {@link #getParameters()}, like the other signature metadata.
+     */
+    public static final String VERSION_PARAM = "_sig_v";
+
+    /** The signing-format version {@link HttpSignatureService#signQueryParameters} produces. */
+    public static final String CURRENT_VERSION = "2";
+
     private final Map<String, String> parameters;
     private final long timestamp;
     private final String signature;
@@ -32,7 +43,7 @@ public class QueryParameterSignature {
      *
      * @param parameters The original parameters (without signature metadata)
      * @param timestamp  The signature timestamp (milliseconds since epoch)
-     * @param signature  The HMAC-SHA256 signature (Base64 URL-encoded)
+     * @param signature  The HMAC-SHA256 signature (Base64 URL-encoded), computed under {@link #CURRENT_VERSION}
      */
     public QueryParameterSignature(final Map<String, String> parameters, final long timestamp, final String signature) {
         this.parameters = new LinkedHashMap<>(parameters);
@@ -70,11 +81,12 @@ public class QueryParameterSignature {
     /**
      * Gets all parameters including signature metadata.
      *
-     * @return Map containing original parameters plus _sig_ts and _sig
+     * @return Map containing original parameters plus _sig_ts, _sig_v and _sig
      */
     public Map<String, String> getAllParameters() {
         final Map<String, String> all = new LinkedHashMap<>(parameters);
         all.put(TIMESTAMP_PARAM, String.valueOf(timestamp));
+        all.put(VERSION_PARAM, CURRENT_VERSION);
         all.put(SIGNATURE_PARAM, signature);
         return all;
     }
