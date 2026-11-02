@@ -2,6 +2,14 @@
 
 Guidance for Claude Code when working in this repository.
 
+## Before any further change: move this library into web-shared
+
+Ruled 2026-11-02 (Brendan): the next time work on http-signatures is needed, the first step is to move
+this library into the `web-shared` repo as a Gradle subproject, and make the change there. Do not cut
+another change or release from this standalone repo. Its consumers (web, oauth2-integrator) pin
+`dev.bluestep:http-signatures` from GitHub Packages, so they move to the web-shared-published artifact
+as part of that work. Last release from this repo: 2.1.0 (query-signature format v2).
+
 ## Project Overview
 
 HMAC-SHA256 HTTP Message Signatures library for Java — signs and verifies both
