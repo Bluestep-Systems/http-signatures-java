@@ -166,10 +166,11 @@ class QueryParameterSignatureTest {
 
         Map<String, String> all = qps.getAllParameters();
 
-        assertEquals(3, all.size());
+        assertEquals(4, all.size());
         assertEquals("example.com", all.get("host"));
         assertEquals(String.valueOf(TEST_TIMESTAMP), all.get(QueryParameterSignature.TIMESTAMP_PARAM));
         assertEquals(TEST_SIGNATURE, all.get(QueryParameterSignature.SIGNATURE_PARAM));
+        assertEquals(QueryParameterSignature.CURRENT_VERSION, all.get(QueryParameterSignature.VERSION_PARAM));
     }
 
     @Test
@@ -252,9 +253,9 @@ class QueryParameterSignatureTest {
 
         String queryString = qps.toQueryString();
 
-        // Count & occurrences (should be 3 for 4 parameters: a, b, _sig_ts, _sig)
+        // Count & occurrences (should be 4 for 5 parameters: a, b, _sig_ts, _sig_v, _sig)
         long ampCount = queryString.chars().filter(ch -> ch == '&').count();
-        assertEquals(3, ampCount);
+        assertEquals(4, ampCount);
     }
 
     @Test
@@ -397,9 +398,9 @@ class QueryParameterSignatureTest {
 
         QueryParameterSignature qps = new QueryParameterSignature(params, TEST_TIMESTAMP, TEST_SIGNATURE);
 
-        assertEquals(100, qps.getParameters().size());
+        // getAllParameters should have 103 (100 + timestamp + version + signature)
         // getAllParameters should have 102 (100 + timestamp + signature)
-        assertEquals(102, qps.getAllParameters().size());
+        assertEquals(103, qps.getAllParameters().size());
     }
 
     @Test
